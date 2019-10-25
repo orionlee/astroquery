@@ -439,6 +439,14 @@ class MastClass(QueryWithLogin):
         response.raise_for_status()
         return [response]
 
+    def _request_w_cache(self, method, url, data=None, headers=None, retrieve_all=True,
+                         cache=False, cache_opts=None):
+        # TODO: implement caching
+        # Note: the method only exposes 4 parameters of the underlying _request() function
+        # to play nice with existing mocks
+        response = self._request(method, url, data=data, headers=headers, retrieve_all=retrieve_all)
+        return response
+
     def _request(self, method, url, params=None, data=None, headers=None,
                  files=None, stream=False, auth=None, retrieve_all=True):
         """
@@ -624,7 +632,7 @@ class MastClass(QueryWithLogin):
         self._authenticated = False
 
     @class_or_instance
-    def service_request_async(self, service, params, pagesize=None, page=None, **kwargs):
+    def service_request_async(self, service, params, pagesize=None, page=None, cache=False, cache_opts=None, **kwargs):
         """
         Given a Mashup service and parameters, builds and excecutes a Mashup query.
         See documentation `here <https://mast.stsci.edu/api/v0/class_mashup_1_1_mashup_request.html>`__
@@ -644,6 +652,10 @@ class MastClass(QueryWithLogin):
             Default None.
             Can be used to override the default behavior of all results being returned to obtain
             a specific page of results.
+        cache : Boolean, optional
+            try to use cached the query result if set to True
+        cache_opts : dict, optional
+            cache options, details TBD, e.g., cache expiration policy, etc.
         **kwargs :
             See MashupRequest properties
             `here <https://mast.stsci.edu/api/v0/class_mashup_1_1_mashup_request.html>`__
@@ -683,8 +695,8 @@ class MastClass(QueryWithLogin):
             mashup_request[prop] = value
 
         req_string = _prepare_service_request_string(mashup_request)
-        response = self._request("POST", self._MAST_REQUEST_URL, data=req_string, headers=headers,
-                                 retrieve_all=retrieve_all)
+        response = self._request_w_cache("POST", self._MAST_REQUEST_URL, data=req_string, headers=headers,
+                                         retrieve_all=retrieve_all, cache=cache, cache_opts=cache_opts)
 
         return response
 
@@ -1177,7 +1189,7 @@ class ObservationsClass(MastClass):
         return self.query_region_async(coordinates, radius, pagesize, page)
 
     @class_or_instance
-    def query_criteria_async(self, pagesize=None, page=None, **criteria):
+    def query_criteria_async(self, pagesize=None, page=None, cache=False, cache_opts=None, **criteria):
         """
         Given an set of criteria, returns a list of MAST observations.
         Valid criteria are returned by ``get_metadata("observations")``
@@ -1190,6 +1202,10 @@ class ObservationsClass(MastClass):
         page : int, optional
             Can be used to override the default behavior of all results being returned to obtain
             one sepcific page of results.
+        cache : Boolean, optional
+            try to use cached the query result if set to True
+        cache_opts : dict, optional
+            cache options, details TBD, e.g., cache expiration policy, etc.
         **criteria
             Criteria to apply. At least one non-positional criteria must be supplied.
             Valid criteria are coordinates, objectname, radius (as in `query_region` and `query_object`),
@@ -1274,7 +1290,7 @@ class ObservationsClass(MastClass):
             params = {"columns": "*",
                       "filters": mashup_filters}
 
-        return self.service_request_async(service, params)
+        return self.service_request_async(service, params, cache=cache, cache_opts=cache_opts)
 
     def query_region_count(self, coordinates, radius=0.2*u.deg, pagesize=None, page=None):
         """
