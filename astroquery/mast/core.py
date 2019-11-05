@@ -8,6 +8,7 @@ This module contains various methods for querying the MAST Portal.
 
 from __future__ import print_function, division
 
+import re
 import warnings
 import json
 import time
@@ -17,6 +18,7 @@ import threading
 import uuid
 
 import numpy as np
+from astroquery.query import AstroQuery, to_cache
 
 from requests import HTTPError
 from getpass import getpass
@@ -441,11 +443,35 @@ class MastClass(QueryWithLogin):
 
     def _request_w_cache(self, method, url, data=None, headers=None, retrieve_all=True,
                          cache=False, cache_opts=None):
-        # TODO: implement caching
         # Note: the method only exposes 4 parameters of the underlying _request() function
         # to play nice with existing mocks
-        response = self._request(method, url, data=data, headers=headers, retrieve_all=retrieve_all)
+        # Caching:  follow BaseQuery._request()'s pattern, which uses an AstroQuery object
+        if not cache:
+            response = self._request(method, url, data=data, headers=headers, retrieve_all=retrieve_all)
+        else:
+            cacher = self._get_cacher(method, url, data, headers, retrieve_all)
+            response = cacher.from_cache(self.cache_location)
+            if not response:
+                response = self._request(method, url, data=data, headers=headers, retrieve_all=retrieve_all)
+                to_cache(response, cacher.request_file(self.cache_location))
         return response
+
+    def _get_cacher(self, method, url, data, headers, retrieve_all):
+        """
+        Return an object that can cache the HTTP request based on the supplied arguments
+        """
+
+        # cacheBreaker parameter (to underlying MAST service) is not relevant (and breaks) local caching
+        # remove it from part of the cache key
+        data_no_cache_breaker = re.sub(r'^(.+)cacheBreaker%22%3A%20%22.+%22', r'\1', data)
+        # include retrieve_all as part of the cache key by appending it to data
+        # it cannot be added as part of req_kwargs dict, as it will be rejected by AstroQuery
+        data_w_retrieve_all = data_no_cache_breaker + " retrieve_all={}".format(retrieve_all)
+        req_kwargs = dict(
+            data=data_no_cache_breaker,
+            headers=headers
+        )
+        return AstroQuery(method, url, **req_kwargs)
 
     def _request(self, method, url, params=None, data=None, headers=None,
                  files=None, stream=False, auth=None, retrieve_all=True):
@@ -525,7 +551,7 @@ class MastClass(QueryWithLogin):
 
         return all_responses
 
-    def _get_col_config(self, service, fetch_name=None):
+    def _get_col_config(self, service, fetch_name=None, cache=False):
         """
         Gets the columnsConfig entry for given service and stores it in `self._column_configs`.
 
@@ -545,8 +571,8 @@ class MastClass(QueryWithLogin):
                    "Content-type": "application/x-www-form-urlencoded",
                    "Accept": "text/plain"}
 
-        response = self._request("POST", self._COLUMNS_CONFIG_URL,
-                                 data=("colConfigId="+fetch_name), headers=headers)
+        response = self._request_w_cache("POST", self._COLUMNS_CONFIG_URL,
+                                 data=("colConfigId="+fetch_name), headers=headers, cache=cache)
 
         self._column_configs[service] = response[0].json()
 
@@ -561,7 +587,7 @@ class MastClass(QueryWithLogin):
         if more:
             mashup_request = {'service': all_name, 'params': {}, 'format': 'extjs'}
             req_string = _prepare_service_request_string(mashup_request)
-            response = self._request("POST", self._MAST_REQUEST_URL, data=req_string, headers=headers)
+            response = self._request_w_cache("POST", self._MAST_REQUEST_URL, data=req_string, headers=headers, cache=cache)
             json_response = response[0].json()
 
             self._column_configs[service].update(json_response['data']['Tables'][0]
@@ -669,7 +695,7 @@ class MastClass(QueryWithLogin):
         # setting self._current_service
         if service not in self._column_configs.keys():
             fetch_name = kwargs.pop('fetch_name', None)
-            self._get_col_config(service, fetch_name)
+            self._get_col_config(service, fetch_name, cache)
         self._current_service = service
 
         # setting up pagination
